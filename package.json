@@ -1,0 +1,36 @@
+{
+  "name": "echo-sync",
+  "version": "6.0.6",
+  "description": "EchoSync v6.0.6 - Secure, Asynchronous, UTF-8 Corrected, Multi-AI Orchestration by Ofer Erez & Team",
+  "main": "echo-sync.js",
+  "scripts": {
+    "start": "node echo-sync.js",
+    "dev": "nodemon echo-sync.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "axios": "^1.9.0",
+    "dotenv": "^16.5.0",
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  },
+  "author": "Ofer Erez & Team (with Gemini AI)",
+  "license": "ISC",
+  "keywords": [
+    "ai",
+    "orchestration",
+    "gpt",
+    "gemini",
+    "claude",
+    "perplexity",
+    "multi-agent",
+    "echosync",
+    "realtime",
+    "socket.io",
+    "secure",
+    "utf-8"
+  ]
+}
