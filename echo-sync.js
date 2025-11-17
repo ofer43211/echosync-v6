@@ -92,13 +92,436 @@ if (CONFIG && CONFIG.server && typeof CONFIG.server.port !== 'undefined') {
 }
 
 // --- TaskAnalyzer Class ---
-class TaskAnalyzer { /* ... ???? ???? ?? TaskAnalyzer ??? ????? 6.0.5/6 ... */ }
+class TaskAnalyzer {
+    constructor() {
+        this.patterns = {
+            creative: ['???', '???', '?????', '????', '????', '???', '?????'],
+            analytical: ['???', '?????', '????', '????', '?????????', '??????'],
+            conversational: ['????', '???', '??', '????', '?????'],
+            technical: ['???', '?????????', 'API', '????', '????', '????????']
+        };
+        this.influenceHistory = new Map();
+        Logger.debug('TaskAnalyzer', 'TaskAnalyzer initialized.');
+    }
+
+    analyzeTask(message, context = {}) {
+        const analysis = {
+            primaryType: 'general',
+            confidence: 0.5,
+            suggestedAgents: ['gpt', 'claude'],
+            taskComplexity: 1,
+            urgency: 'normal',
+            estimatedDuration: 'medium',
+            adaptiveScore: 0.5
+        };
+
+        const lowerMessage = message.toLowerCase();
+
+        for (const [type, patterns] of Object.entries(this.patterns)) {
+            const matches = patterns.filter(pattern => lowerMessage.includes(pattern));
+            if (matches.length > 0) {
+                analysis.primaryType = type;
+                analysis.confidence = Math.min(0.9, 0.3 + (matches.length * 0.2));
+                break;
+            }
+        }
+
+        switch (analysis.primaryType) {
+            case 'creative':
+                analysis.suggestedAgents = ['gpt', 'claude', 'gemini'];
+                break;
+            case 'analytical':
+                analysis.suggestedAgents = ['claude', 'perplexity'];
+                break;
+            case 'technical':
+                analysis.suggestedAgents = ['gpt', 'claude'];
+                break;
+            default:
+                analysis.suggestedAgents = ['gpt', 'gemini'];
+        }
+
+        return analysis;
+    }
+
+    calculateAdaptiveScore(suggestedAgents) { return 0.5; }
+    updateInfluenceHistory(agentKey, rating, context = '') {
+        if (!this.influenceHistory.has(agentKey)) {
+            this.influenceHistory.set(agentKey, []);
+        }
+        this.influenceHistory.get(agentKey).push({ rating, context, timestamp: Date.now() });
+    }
+}
 
 // --- Secure Credentials Manager ---
-class SecureCredentialsManager { /* ... ???? ???? ?? SecureCredentialsManager ??? ????? 6.0.5/6 ... */ }
+class SecureCredentialsManager {
+    constructor() {
+        this.credentialsFile = path.join(__dirname, 'encrypted_credentials.json');
+        this.encryptionKeyPath = path.join(__dirname, '.encryption_key');
+        this.encryptionKey = this._generateOrLoadEncryptionKey();
+        this.credentials = new Map();
+        this.initialized = false;
+        Logger.info('SecureCredentialsManager', 'Instance created.');
+    }
+
+    _generateOrLoadEncryptionKey() {
+        if (fsSync.existsSync(this.encryptionKeyPath)) {
+            try {
+                return fsSync.readFileSync(this.encryptionKeyPath, 'utf8').trim();
+            } catch (error) {
+                Logger.warn('SecureCredentialsManager', 'Failed to load encryption key, generating new one');
+            }
+        }
+
+        const newKey = crypto.randomBytes(32).toString('hex');
+        try {
+            fsSync.writeFileSync(this.encryptionKeyPath, newKey);
+            Logger.info('SecureCredentialsManager', 'New encryption key generated and saved');
+        } catch (error) {
+            Logger.error('SecureCredentialsManager', 'Failed to save encryption key', error);
+        }
+        return newKey;
+    }
+
+    encrypt(text) {
+        try {
+            const iv = crypto.randomBytes(16);
+            const cipher = crypto.createCipheriv('aes-256-cbc', Buffer.from(this.encryptionKey, 'hex'), iv);
+            let encrypted = cipher.update(text, 'utf8', 'hex');
+            encrypted += cipher.final('hex');
+            return iv.toString('hex') + ':' + encrypted;
+        } catch (error) {
+            Logger.error('SecureCredentialsManager', 'Encryption failed', error);
+            return null;
+        }
+    }
+
+    decrypt(encryptedText) {
+        try {
+            const parts = String(encryptedText).split(':');
+            if (parts.length < 2) return null;
+
+            const iv = Buffer.from(parts[0], 'hex');
+            const encryptedData = parts[1];
+            const decipher = crypto.createDecipheriv('aes-256-cbc', Buffer.from(this.encryptionKey, 'hex'), iv);
+            let decrypted = decipher.update(encryptedData, 'hex', 'utf8');
+            decrypted += decipher.final('utf8');
+            return decrypted;
+        } catch (error) {
+            Logger.error('SecureCredentialsManager', 'Decryption failed', error);
+            return null;
+        }
+    }
+
+    async loadCredentials() {
+        Logger.info('SecureCredentialsManager', 'Loading credentials...');
+
+        // Load from .env file first
+        const envKeys = {
+            openai: process.env.OPENAI_API_KEY,
+            claude: process.env.CLAUDE_API_KEY,
+            gemini: process.env.GEMINI_API_KEY,
+            perplexity: process.env.PERPLEXITY_API_KEY
+        };
+
+        for (const [service, key] of Object.entries(envKeys)) {
+            if (key && key.trim() !== '') {
+                this.credentials.set(service, key.trim());
+                Logger.info('SecureCredentialsManager', `Loaded ${service} key from .env`);
+            }
+        }
+
+        // Try to load from encrypted file as well
+        try {
+            if (fsSync.existsSync(this.credentialsFile)) {
+                const encryptedData = await fsp.readFile(this.credentialsFile, 'utf8');
+                const data = JSON.parse(encryptedData);
+
+                for (const [service, encryptedKey] of Object.entries(data)) {
+                    const decryptedKey = this.decrypt(encryptedKey);
+                    if (decryptedKey && !this.credentials.has(service.toLowerCase())) {
+                        this.credentials.set(service.toLowerCase(), decryptedKey);
+                        Logger.info('SecureCredentialsManager', `Loaded ${service} key from encrypted file`);
+                    }
+                }
+            }
+        } catch (error) {
+            Logger.error('SecureCredentialsManager', 'Failed to load encrypted credentials', error);
+        }
+
+        this.initialized = true;
+        Logger.info('SecureCredentialsManager', `Credentials manager initialized with ${this.credentials.size} keys`);
+    }
+
+    async saveCredentials() {
+        try {
+            const dataToSave = {};
+            for (const [service, key] of this.credentials.entries()) {
+                const encrypted = this.encrypt(key);
+                if (encrypted) {
+                    dataToSave[service] = encrypted;
+                }
+            }
+
+            await fsp.writeFile(this.credentialsFile, JSON.stringify(dataToSave, null, 2));
+            Logger.info('SecureCredentialsManager', 'Credentials saved successfully');
+            return true;
+        } catch (error) {
+            Logger.error('SecureCredentialsManager', 'Failed to save credentials', error);
+            return false;
+        }
+    }
+
+    async setCredential(service, key) {
+        if (!this.initialized) await this.loadCredentials();
+
+        const serviceLower = String(service).toLowerCase();
+        if (!key || String(key).trim() === '') {
+            this.credentials.delete(serviceLower);
+            Logger.info('SecureCredentialsManager', `Credential for ${serviceLower} removed.`);
+        } else {
+            this.credentials.set(serviceLower, String(key).trim());
+            Logger.info('SecureCredentialsManager', `Credential for ${serviceLower} set/updated.`);
+        }
+
+        return await this.saveCredentials();
+    }
+
+    getCredential(service) {
+        return this.credentials.get(String(service).toLowerCase()) || null;
+    }
+
+    hasCredential(service) {
+        const key = this.credentials.get(String(service).toLowerCase());
+        return !!key && key !== '';
+    }
+
+    getStatus() {
+        const services = ['gemini', 'openai', 'claude', 'perplexity'];
+        return services.map(s => {
+            const key = this.getCredential(s);
+            return {
+                service: s,
+                status: key ? 'active' : 'missing',
+                hasKey: !!key,
+                keyPreview: key ? `${key.substring(0,4)}...${key.substring(key.length-4)}` : '?? ?????'
+            };
+        });
+    }
+}
 
 // --- AdvancedEchoNode Class ---
-class AdvancedEchoNode { /* ... ???? ???? ?? AdvancedEchoNode ??? ????? 6.0.5/6 (?? ?? ???????? ?-call...API ??-simulate ?????) ... */ }
+class AdvancedEchoNode {
+    constructor(name, apiType = 'simulation') {
+        this.name = name;
+        this.apiType = apiType;
+        this.personalPrompt = '';
+        this.mood = 'neutral';
+        this.specializations = [];
+        this.metrics = {
+            totalCalls: 0,
+            successfulCalls: 0,
+            failedCalls: 0,
+            avgResponseTime: 0,
+            lastUsed: null,
+            totalResponseTime: 0
+        };
+        this.conversationHistory = [];
+        this.socketIO = null;
+        Logger.info('AdvancedEchoNode', `${this.name} initialized as ${this.apiType}.`);
+    }
+
+    setPersonalPrompt(prompt) { this.personalPrompt = prompt; }
+    setSocketIO(io) { this.socketIO = io; }
+
+    async send(message, context = {}, credentialsManager) {
+        const startTime = Date.now();
+        this.metrics.totalCalls++;
+        this.metrics.lastUsed = new Date().toISOString();
+
+        let response = '';
+        let success = false;
+
+        try {
+            response = await this.callModel(message, context, credentialsManager);
+            this.metrics.successfulCalls++;
+            success = true;
+        } catch (error) {
+            Logger.error('AdvancedEchoNode', `Error in send for ${this.name}`, error);
+            this.metrics.failedCalls++;
+            response = `? ${this.name}: ????? - ${error.message}`;
+        }
+
+        const responseTime = Date.now() - startTime;
+        this.metrics.totalResponseTime += responseTime;
+        this.metrics.avgResponseTime = this.metrics.successfulCalls > 0 ?
+            this.metrics.totalResponseTime / this.metrics.successfulCalls : responseTime;
+
+        return {
+            message: response,
+            timestamp: new Date().toISOString(),
+            apiType: this.apiType,
+            responseTime,
+            mood: this.mood,
+            nodeId: this.name,
+            success
+        };
+    }
+
+    async callModel(message, context, credentialsManager) {
+        const effectiveApiType = credentialsManager.hasCredential(this.apiType) ? this.apiType : 'simulation';
+        Logger.debug('AdvancedEchoNode', `Effective API type for ${this.name}: ${effectiveApiType}`);
+        const apiKey = credentialsManager.getCredential(effectiveApiType);
+
+        switch (effectiveApiType) {
+            case 'gemini':
+                return await this.callGemini(message, context, apiKey);
+            case 'openai':
+                return await this.callOpenAI(message, context, apiKey);
+            case 'claude':
+                return await this.callClaude(message, context, apiKey);
+            case 'perplexity':
+                return await this.callPerplexity(message, context, apiKey);
+            default:
+                return await this.simulate(message, context, `No API key for '${this.apiType}' or type '${effectiveApiType}' not supported`);
+        }
+    }
+
+    async callGemini(message, context, apiKey) {
+        if (!apiKey) return this.simulate(message, context, "Gemini key missing");
+
+        try {
+            const response = await axios.post(
+                `${CONFIG.apis.gemini.endpoint}/models/${CONFIG.apis.gemini.model}:generateContent?key=${apiKey}`,
+                {
+                    contents: [{
+                        parts: [{
+                            text: `${this.personalPrompt}\n${message}`
+                        }]
+                    }]
+                },
+                { timeout: 20000 }
+            );
+
+            return `?? ${this.name} (Gemini): ${response.data.candidates[0].content.parts[0].text}`;
+        } catch (error) {
+            Logger.error('GeminiAPI', error.message);
+            throw error;
+        }
+    }
+
+    async callOpenAI(message, context, apiKey) {
+        if (!apiKey) return this.simulate(message, context, "OpenAI key missing");
+
+        try {
+            const response = await axios.post(
+                `${CONFIG.apis.openai.endpoint}/chat/completions`,
+                {
+                    model: CONFIG.apis.openai.model,
+                    messages: [
+                        { role: 'system', content: this.personalPrompt },
+                        { role: 'user', content: message }
+                    ]
+                },
+                {
+                    headers: { 'Authorization': `Bearer ${apiKey}` },
+                    timeout: 20000
+                }
+            );
+
+            return `?? ${this.name} (OpenAI): ${response.data.choices[0].message.content}`;
+        } catch (error) {
+            Logger.error('OpenAIAPI', error.message);
+            throw error;
+        }
+    }
+
+    async callClaude(message, context, apiKey) {
+        if (!apiKey) return this.simulate(message, context, "Claude key missing");
+
+        try {
+            const response = await axios.post(
+                `${CONFIG.apis.claude.endpoint}/messages`,
+                {
+                    model: CONFIG.apis.claude.model,
+                    max_tokens: CONFIG.apis.claude.maxTokens,
+                    messages: [{ role: 'user', content: message }],
+                    system: this.personalPrompt
+                },
+                {
+                    headers: {
+                        'x-api-key': apiKey,
+                        'anthropic-version': '2023-06-01',
+                        'content-type': 'application/json'
+                    },
+                    timeout: 25000
+                }
+            );
+
+            return `?? ${this.name} (Claude): ${response.data.content[0].text}`;
+        } catch (error) {
+            Logger.error('ClaudeAPI', error.message);
+            throw error;
+        }
+    }
+
+    async callPerplexity(message, context, apiKey) {
+        if (!apiKey) return this.simulate(message, context, "Perplexity key missing");
+
+        try {
+            const response = await axios.post(
+                `${CONFIG.apis.perplexity.endpoint}/chat/completions`,
+                {
+                    model: CONFIG.apis.perplexity.model,
+                    messages: [
+                        { role: 'system', content: this.personalPrompt },
+                        { role: 'user', content: message }
+                    ]
+                },
+                {
+                    headers: { 'Authorization': `Bearer ${apiKey}` },
+                    timeout: 25000
+                }
+            );
+
+            return `?? ${this.name} (Perplexity): ${response.data.choices[0].message.content}`;
+        } catch (error) {
+            Logger.error('PerplexityAPI', error.message);
+            throw error;
+        }
+    }
+
+    async simulate(message, context, reason = "Simulation mode") {
+        await new Promise(r => setTimeout(r, 100 + Math.random() * 100));
+        const responses = [
+            `??? ???? ?? ????? ???: "${String(message).substring(0, 30)}..."`,
+            `?? ???? ???????! ???? ???? ?? ?? ???.`,
+            `??? ??? ????? ?? ??: "${String(message).substring(0, 25)}..."`,
+            `???? ?? ?????! ?? ???? ????.`
+        ];
+
+        const randomResponse = responses[Math.floor(Math.random() * responses.length)];
+        return `?? ${this.name} (???????? - ${reason}): ${randomResponse}`;
+    }
+
+    getStatus() {
+        return {
+            name: this.name,
+            apiType: this.apiType,
+            mood: this.mood,
+            metrics: this.metrics
+        };
+    }
+
+    getNodeEmoji() {
+        const emojis = {
+            'GPT-רמי': '??',
+            'קלוד-עסקים': '??',
+            'גמיני-רכז': '??',
+            'פרפלקסיטי-חוקר': '??'
+        };
+        return emojis[this.name] || '??';
+    }
+}
 
 // --- EchoSyncOrchestrator Class ---
 class EchoSyncOrchestrator {
@@ -116,11 +539,224 @@ class EchoSyncOrchestrator {
         requiredDirs.forEach(dir => ensureDirectoryExists(path.join(__dirname, dir)));
     }
 
-    async initialize() { /* ... ??? ???? ????? 6.0.6, ???? ?-try...catch ... */ }
-    initializeNodes() { /* ... ??? ???? ????? 6.0.6 ... */ }
-    setupMiddleware() { /* ... ??? ???? ????? 6.0.6 ... */ }
-    setupRoutes() { /* ... ??? ???? ????? 6.0.6 ... */ }
-    setupSocketIO() { /* ... ??? ???? ????? 6.0.6 ... */ }
+    async initialize() {
+        Logger.info('Orchestrator', 'Starting asynchronous initialization...');
+        await this.credentialsManager.loadCredentials();
+        Logger.info('Orchestrator', '? SecureCredentialsManager initialized!');
+        this.systemMetrics.startTime = new Date();
+
+        const apiStatusLog = this.credentialsManager.getStatus();
+        Logger.info('Orchestrator', '?? Initial API Status from SecureCredentialsManager:');
+        apiStatusLog.forEach(({service, status, keyPreview}) => {
+            const icon = status === 'active' ? '??' : '??';
+            Logger.info('Orchestrator', `   ${service.padEnd(12)}: ${icon} ${status.padEnd(10)} (${keyPreview})`);
+        });
+
+        this.initializeNodes();
+        this.setupMiddleware();
+        this.setupRoutes();
+        if (CONFIG.features.realtime) { this.setupSocketIO(); }
+
+        Logger.info('EchoOrchestrator', `EchoSync v6.0.7 fully initialized. Env: ${CONFIG.server.env}`);
+    }
+
+    initializeNodes() {
+        Logger.info('Orchestrator', 'Initializing AI Nodes...');
+        const nodeTemplates = [
+            { key: 'gpt', name: 'GPT-רמי', apiType: 'openai', prompt: '??? GPT-רמי, ????? ??????, ????? ????????? ????? ?????.' },
+            { key: 'claude', name: 'קלוד-עסקים', apiType: 'claude', prompt: '??? קלוד-עסקים, ???? ???? ??????? ?????.' },
+            { key: 'gemini', name: 'גמיני-רכז', apiType: 'gemini', prompt: '??? גמיני-רכז, ???? ?????? ?????.' },
+            { key: 'perplexity', name: 'פרפלקסיטי-חוקר', apiType: 'perplexity', prompt: '??? פרפלקסיטי-חוקר, ???? ????? ????? ???? ?????.' }
+        ];
+
+        nodeTemplates.forEach(t => {
+            const effectiveApiType = this.credentialsManager.hasCredential(t.apiType) ? t.apiType : 'simulation';
+            const node = new AdvancedEchoNode(t.name, effectiveApiType);
+            node.setPersonalPrompt(t.prompt);
+            if (CONFIG.features.realtime && this.io) node.setSocketIO(this.io);
+            this.nodes.set(t.key, node);
+        });
+        Logger.info('EchoOrchestrator', `${this.nodes.size} nodes configured.`);
+    }
+
+    setupMiddleware() {
+        Logger.info('Orchestrator', 'Setting up middleware...');
+        this.app.use(express.json({limit: '10mb'}));
+        this.app.use(express.static(path.join(__dirname, 'public')));
+
+        this.app.use((req, res, next) => {
+            res.header('Access-Control-Allow-Origin', '*');
+            res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+            res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Session-Id');
+            if (req.method === 'OPTIONS') return res.sendStatus(200);
+            next();
+        });
+
+        this.app.use((req, res, next) => {
+            const startReqTime = Date.now();
+            req.sessionId = req.headers['x-session-id'] || `anon-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`;
+            Logger.debug('HTTP', `${req.method} ${req.path} started`, {ip: req.ip, sid: req.sessionId});
+            res.on('finish', () => {
+                Logger.info('HTTP', `${req.method} ${req.originalUrl} - ${res.statusCode} (${Date.now() - startReqTime}ms)`, {ip: req.ip, sid: req.sessionId});
+            });
+            next();
+        });
+        Logger.info('Orchestrator', 'Middleware setup complete.');
+    }
+
+    setupRoutes() {
+        Logger.info('Orchestrator', 'Setting up routes...');
+
+        this.app.get('/', (req, res) => {
+            try {
+                const apiStatuses = this.credentialsManager.getStatus();
+                const nodeStatuses = Array.from(this.nodes.values()).map(node => node.getStatus());
+                const uptime = this.systemMetrics.startTime ? Math.floor((Date.now() - this.systemMetrics.startTime) / 1000) : 0;
+                res.setHeader('Content-Type', 'text/html; charset=utf-8');
+                res.send(this.generateHomePage(apiStatuses, nodeStatuses, uptime));
+            } catch (e) {
+                Logger.error("Route '/'", "Error generating homepage", e);
+                res.status(500).send("????? ?????? ?? ????");
+            }
+        });
+
+        this.app.get('/credentials', (req, res) => {
+            try {
+                const apiStatuses = this.credentialsManager.getStatus();
+                res.setHeader('Content-Type', 'text/html; charset=utf-8');
+                res.send(this.generateSecurityPage(apiStatuses));
+            } catch (e) {
+                Logger.error("Route '/credentials'", "Error generating security page", e);
+                res.status(500).send("????? ?????? ?? ?????");
+            }
+        });
+
+        this.app.post('/api/credentials', async (req, res) => {
+            const { service, key } = req.body;
+            Logger.info('Route /api/credentials', `Attempting to set/remove key for ${service}`);
+            if (!service) return res.status(400).json({ success: false, error: 'Service name required' });
+
+            try {
+                const success = await this.credentialsManager.setCredential(service, key);
+                if (success) {
+                    this.nodes.forEach(node => {
+                        if (node.apiType === service || (node.apiType === 'simulation' && this.credentialsManager.hasCredential(service))) {
+                             node.apiType = this.credentialsManager.hasCredential(service) ? service : 'simulation';
+                             Logger.info('Orchestrator', `Node ${node.name} apiType updated to ${node.apiType} after credential change for ${service}.`);
+                        }
+                    });
+
+                    if (this.io && CONFIG.features.realtime) {
+                        this.io.emit('system_status_update', this.generateSystemStatus());
+                    }
+                    res.json({ success: true, message: `???? ${service} ?????`, hasKey: this.credentialsManager.hasCredential(service) });
+                } else {
+                    res.status(500).json({ success: false, error: 'Failed to save credentials' });
+                }
+            } catch (error) {
+                Logger.error("Route /api/credentials", "Error setting credential", error);
+                res.status(500).json({ success: false, error: error.message });
+            }
+        });
+
+        this.app.get('/api/credentials/status', (req, res) => {
+             if (!this.credentialsManager.initialized) return res.status(503).json({success: false, error: "Credentials not loaded yet"});
+             res.json({ success: true, credentials: this.credentialsManager.getStatus() });
+        });
+
+        this.app.get('/status', (req, res) => res.json(this.generateSystemStatus()));
+        this.app.get('/health', (req, res) => res.json(this.generateSystemHealthData()));
+
+        this.app.post('/echo-all', async (req, res) => {
+            Logger.info('EchoOrchestrator', '>>> /echo-all RAW HIT <<<', { body: req.body });
+
+            try {
+                const { message, nodes = 'all', context = {} } = req.body;
+
+                if (!message || typeof message !== 'string' || message.trim() === '') {
+                    return res.status(400).json({
+                        success: false,
+                        error: 'Message is required'
+                    });
+                }
+
+                const taskAnalysis = this.taskAnalyzer.analyzeTask(message, context);
+                let agentKeysToUse;
+
+                if (nodes === 'all') {
+                    agentKeysToUse = Array.from(this.nodes.keys());
+                } else if (Array.isArray(nodes)) {
+                    agentKeysToUse = nodes.filter(key => this.nodes.has(key));
+                } else if (this.nodes.has(nodes)) {
+                    agentKeysToUse = [nodes];
+                } else {
+                    agentKeysToUse = Array.from(this.nodes.keys());
+                }
+
+                const results = {};
+                const promises = agentKeysToUse.map(key => {
+                    const node = this.nodes.get(key);
+                    if (node) {
+                        return node.send(message, { taskAnalysis, _requester: 'echo-all' }, this.credentialsManager)
+                            .then(response => {
+                                results[key] = response;
+                            })
+                            .catch(e => {
+                                results[key] = {
+                                    error: e.message,
+                                    timestamp: new Date().toISOString()
+                                };
+                                Logger.error('EchoAll', `Node ${key} error`, e);
+                            });
+                    }
+                    return Promise.resolve();
+                });
+
+                await Promise.all(promises);
+
+                this.systemMetrics.totalRequests++;
+                this.systemMetrics.successfulRequests++;
+
+                res.json({
+                    success: true,
+                    message,
+                    taskAnalysis,
+                    responses: results,
+                    timestamp: new Date().toISOString()
+                });
+
+            } catch (error) {
+                this.systemMetrics.failedRequests++;
+                Logger.error('EchoOrchestrator', '/echo-all critical error', error);
+                res.status(500).json({
+                    success: false,
+                    error: 'Server error: ' + error.message
+                });
+            }
+        });
+
+        Logger.info('Orchestrator', 'Routes setup complete.');
+    }
+
+    setupSocketIO() {
+        Logger.info('SocketIO', 'Setting up Socket.IO...');
+
+        this.io.on('connection', (socket) => {
+            Logger.info('SocketIO', `Client connected: ${socket.id}`);
+
+            socket.emit('system_status', this.generateSystemStatus());
+
+            socket.on('disconnect', () => {
+                Logger.info('SocketIO', `Client disconnected: ${socket.id}`);
+            });
+
+            socket.on('get_status', () => {
+                socket.emit('system_status', this.generateSystemStatus());
+            });
+        });
+
+        Logger.info('SocketIO', 'Socket.IO setup complete and listening.');
+    }
 
     generateHomePage(apiStatuses, nodeStatuses, uptime) {
         const activeApis = apiStatuses.filter(api => api.status === 'active').length;
@@ -614,11 +1250,51 @@ class EchoSyncOrchestrator {
 </body>
 </html>`;
     }
-    generateSystemStatus() { return { echosync_status: 'active', version: '6.0.7' }; }
-    // ... Other orchestrator methods ...
+    generateSystemStatus() {
+        return {
+            echosync_status: 'active',
+            version: '6.0.7',
+            uptime: this.systemMetrics.startTime ?
+                Math.floor((Date.now() - this.systemMetrics.startTime) / 1000) : 0,
+            nodes: Array.from(this.nodes.values()).map(node => node.getStatus()),
+            apis: this.credentialsManager.getStatus()
+        };
+    }
 
-    async start(port = CONFIG.server.port) { /* ... ??? ???? ... */ }
-    stop() { /* ... ??? ???? ... */ }
+    generateSystemHealthData() {
+        const uptime = this.systemMetrics.startTime ?
+            Math.floor((Date.now() - this.systemMetrics.startTime) / 1000) : 0;
+
+        return {
+            status: 'healthy',
+            version: '6.0.7',
+            uptime: uptime,
+            metrics: this.systemMetrics,
+            nodes: this.nodes.size,
+            credentials: this.credentialsManager.getStatus().filter(c => c.status === 'active').length
+        };
+    }
+
+    async start(port = CONFIG.server.port) {
+        try {
+            await this.initialize();
+            this.server.listen(port, () => {
+                Logger.info('EchoOrchestrator', `?? EchoSync v6.0.7 Server running on port ${port}`);
+                Logger.info('EchoOrchestrator', `?? Homepage: http://localhost:${port}/`);
+                Logger.info('EchoOrchestrator', `?? Security Center: http://localhost:${port}/credentials`);
+                Logger.info('EchoOrchestrator', `?? API Endpoint: POST http://localhost:${port}/echo-all`);
+            });
+        } catch (error) {
+            Logger.error('Orchestrator', 'Failed to start EchoSync Orchestrator', error);
+            process.exit(1);
+        }
+    }
+
+    stop() {
+        if (this.server) {
+            this.server.close(() => Logger.info('Orchestrator', 'EchoSync server stopped.'));
+        }
+    }
 }
 
 // --- Application Start & Graceful Shutdown ---
